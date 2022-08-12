@@ -1,5 +1,11 @@
 # create-sst
 
+## 1.6.11
+
+### Patch Changes
+
+- [`69fc4c9`](https://github.com/serverless-stack/sst/commit/69fc4c9297f917c37153a4e50d3c7cfa2af90115) Thanks [@fwang](https://github.com/fwang)! - create-sst: normalize app name to be compatible with stack names
+
 ## 1.6.10
 
 ## 1.6.9
