@@ -1,5 +1,11 @@
 # @serverless-stack/cli2
 
+## 2.7.3
+
+### Patch Changes
+
+- [`42ab9acbe`](https://github.com/serverless-stack/sst/commit/42ab9acbee06ade79774c2d1b3f58a78e2f62a7f) Thanks [@fwang](https://github.com/fwang)! - Function: handle Rate Exceeded error setting log retention
+
 ## 2.7.2
 
 ### Patch Changes
