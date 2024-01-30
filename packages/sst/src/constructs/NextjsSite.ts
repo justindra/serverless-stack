@@ -912,9 +912,13 @@ if (event.rawPath) {
    * @returns
    */
   private getBasePath() {
-    // TODO: check all extensions for next.js config file
-    const pathToNextConfig = path.join(this.props.path, "next.config.mjs");
-    if (fs.existsSync(pathToNextConfig)) {
+    const extensions = [".js", ".mjs"];
+
+    const pathsToNextConfig = extensions
+      .map((ext) => path.join(this.props.path, `next.config${ext}`))
+      .filter((path) => fs.existsSync(path));
+
+    if (pathsToNextConfig.length) {
       const getBasePathScript = path.join(
         __dirname,
         "../..",
@@ -925,7 +929,7 @@ if (event.rawPath) {
       // This is a way to get around the fact that dynamic imports is async and
       // the planning needs to be synchronous.
       const res = execSync(
-        ["npx tsx", getBasePathScript, pathToNextConfig].join(" ")
+        ["npx tsx", getBasePathScript, pathsToNextConfig[0]].join(" ")
       );
 
       const basePath = res
@@ -940,6 +944,7 @@ if (event.rawPath) {
         return { prefix: `${basePath}/`, suffix: `/${basePath}` };
       }
     }
+
     return { prefix: "", suffix: "" };
   }
 
