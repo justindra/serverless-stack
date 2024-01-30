@@ -4,6 +4,8 @@ import zlib from "zlib";
 import crypto from "crypto";
 import { globSync } from "glob";
 import { Construct } from "constructs";
+import url from "url";
+import { execSync } from "child_process";
 import {
   Duration as CdkDuration,
   RemovalPolicy,
@@ -38,6 +40,8 @@ import { Asset } from "aws-cdk-lib/aws-s3-assets";
 import { useFunctions } from "./Function.js";
 import { useDeferredTasks } from "./deferred_task.js";
 import { Logger } from "../logger.js";
+
+const __dirname = url.fileURLToPath(new URL(".", import.meta.url));
 
 export interface NextjsSiteProps extends Omit<SsrSiteProps, "nodejs"> {
   /**
@@ -269,6 +273,8 @@ export class NextjsSite extends SsrSite {
       cdk,
     } = this.props;
     const stack = Stack.of(this);
+    const { prefix, suffix } = this.getBasePath();
+
     const serverConfig = {
       description: "Next.js server",
       bundle: path.join(sitePath, ".open-next", "server-function"),
@@ -334,7 +340,7 @@ export class NextjsSite extends SsrSite {
             architecture: Architecture.ARM_64,
             environment: {
               BUCKET_NAME: bucket.bucketName,
-              BUCKET_KEY_PREFIX: "_assets",
+              BUCKET_KEY_PREFIX: `_assets${suffix}`,
             },
             memorySize: imageOptimization?.memorySize
               ? typeof imageOptimization.memorySize === "string"
@@ -349,7 +355,7 @@ export class NextjsSite extends SsrSite {
           copy: [
             {
               from: ".open-next/assets",
-              to: "_assets",
+              to: `_assets${suffix}`,
               cached: true,
               versionedSubDir: "_next",
             },
@@ -368,14 +374,14 @@ export class NextjsSite extends SsrSite {
               } as const,
               {
                 cacheType: "server",
-                pattern: "api/*",
+                pattern: `${prefix}api/*`,
                 cfFunction: "serverCfFunction",
                 edgeFunction: "edgeServer",
                 origin: "s3",
               } as const,
               {
                 cacheType: "server",
-                pattern: "_next/data/*",
+                pattern: `${prefix}_next/data/*`,
                 cfFunction: "serverCfFunction",
                 edgeFunction: "edgeServer",
                 origin: "s3",
@@ -389,20 +395,20 @@ export class NextjsSite extends SsrSite {
               } as const,
               {
                 cacheType: "server",
-                pattern: "api/*",
+                pattern: `${prefix}api/*`,
                 cfFunction: "serverCfFunction",
                 origin: "regionalServer",
               } as const,
               {
                 cacheType: "server",
-                pattern: "_next/data/*",
+                pattern: `${prefix}_next/data/*`,
                 cfFunction: "serverCfFunction",
                 origin: "regionalServer",
               } as const,
             ]),
         {
           cacheType: "server",
-          pattern: "_next/image*",
+          pattern: `${prefix}_next/image*`,
           cfFunction: "serverCfFunction",
           origin: "imageOptimizer",
         },
@@ -414,8 +420,8 @@ export class NextjsSite extends SsrSite {
               pattern: fs
                 .statSync(path.join(sitePath, ".open-next/assets", item))
                 .isDirectory()
-                ? `${item}/*`
-                : item,
+                ? `${prefix}${item}/*`
+                : `${prefix}${item}`,
               origin: "s3",
             } as const)
         ),
@@ -744,7 +750,7 @@ if (event.rawPath) {
     if (prefix) return event.rawPath === prefix || (event.rawPath === prefix + "/");
     return false;
   });
-  if (routeData) {
+    if (routeData) {
     console.log("::sst::" + JSON.stringify({
       action:"log.split",
       properties: {
@@ -898,6 +904,43 @@ if (event.rawPath) {
         });
       });
     });
+  }
+
+  /**
+   * Get the basePath from the `next.js` config file and return it as a prefix
+   * and suffix for the routes.
+   * @returns
+   */
+  private getBasePath() {
+    // TODO: check all extensions for next.js config file
+    const pathToNextConfig = path.join(this.props.path, "next.config.mjs");
+    if (fs.existsSync(pathToNextConfig)) {
+      const getBasePathScript = path.join(
+        __dirname,
+        "../..",
+        "support/nextjs-site-build-helper",
+        "get-base-path.ts"
+      );
+
+      // This is a way to get around the fact that dynamic imports is async and
+      // the planning needs to be synchronous.
+      const res = execSync(
+        ["npx tsx", getBasePathScript, pathToNextConfig].join(" ")
+      );
+
+      const basePath = res
+        .toString()
+        // Remove any whitespace
+        .trim()
+        // If it starts with a slash, remove it
+        .replace(/^\//, "");
+
+      if (basePath) {
+        Logger.debug(`Setting base path to "${basePath}"`);
+        return { prefix: `${basePath}/`, suffix: `/${basePath}` };
+      }
+    }
+    return { prefix: "", suffix: "" };
   }
 
   private static buildCloudWatchRouteName(route: string) {
