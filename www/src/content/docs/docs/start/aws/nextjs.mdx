@@ -504,7 +504,9 @@ COPY . .
 RUN npm run build
 
 # If static pages need linked resources
-# RUN --mount=type=secret,id=SST_RESOURCE_MyResource,env=SST_RESOURCE_MyResource \
+# You MUST mount the SST_RESOURCE_App when doing this as well
+# RUN --mount=type=secret,id=SST_RESOURCE_App,env=SST_RESOURCE_App \
+#   --mount=type=secret,id=SST_RESOURCE_MyResource,env=SST_RESOURCE_MyResource \
 #   npm run build
 
 # Stage 3: Production server
