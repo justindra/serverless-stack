@@ -75,7 +75,7 @@ declare global {
   export const $linkable: typeof import("./components/link").Link.linkable;
 
   /**
-   * A convenience reference to the the [`util`](https://www.pulumi.com/docs/reference/pkg/nodejs/pulumi/pulumi/) module from Pulumi.
+   * A convenience reference to the [`util`](https://www.pulumi.com/docs/reference/pkg/nodejs/pulumi/pulumi/) module from Pulumi.
    *
    * This is useful for working with components. You can use these without importing or installing the Pulumi SDK.
    *
@@ -322,7 +322,7 @@ declare global {
    * ```ts title="sst.config.ts"
    * $transform(sst.aws.Function, (args, opts, name) => {
    *   // Set the default if it's not set by the component
-   *   args.runtime ??= "nodejs20.x";
+   *   args.runtime ??= "nodejs24.x";
    * });
    * ```
    *

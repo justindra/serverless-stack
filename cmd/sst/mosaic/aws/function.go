@@ -76,6 +76,7 @@ func function(ctx context.Context, input input) {
 		Worker           runtime.Worker
 		CurrentRequestID string
 		Env              []string
+		Streaming        bool
 	}
 	workerShutdownChan := make(chan *WorkerInfo, 1000)
 	nextChan := map[string]chan io.Reader{}
@@ -143,19 +144,32 @@ func function(ctx context.Context, input input) {
 		log.Info("got response", "workerID", workerID, "requestID", r.PathValue("requestID"))
 		writer := input.client.NewWriter(bridge.MessageResponse, input.prefix+"/"+workerID+"/in")
 		writer.SetID(requestID)
-		var buf bytes.Buffer
-		tee := io.TeeReader(r.Body, &buf)
-		io.Copy(writer, tee)
-		writer.Close()
-		w.WriteHeader(202)
 		info, ok := workers[workerID]
-		if ok {
+		if ok && info.Streaming {
+			writer.SetStreaming(true)
+			io.Copy(writer, r.Body)
+			writer.Close()
+			w.WriteHeader(202)
 			bus.Publish(&FunctionResponseEvent{
 				FunctionID: info.FunctionID,
 				WorkerID:   workerID,
 				RequestID:  requestID,
-				Output:     buf.Bytes(),
+				Output:     []byte("[streaming response]"),
 			})
+		} else {
+			var buf bytes.Buffer
+			tee := io.TeeReader(r.Body, &buf)
+			io.Copy(writer, tee)
+			writer.Close()
+			w.WriteHeader(202)
+			if ok {
+				bus.Publish(&FunctionResponseEvent{
+					FunctionID: info.FunctionID,
+					WorkerID:   workerID,
+					RequestID:  requestID,
+					Output:     buf.Bytes(),
+				})
+			}
 		}
 	})
 
@@ -212,7 +226,7 @@ func function(ctx context.Context, input input) {
 		return build
 	}
 
-	run := func(functionID string, workerID string) bool {
+	startWorker := func(functionID string, workerID string) bool {
 		build := getBuildOutput(functionID)
 		if build == nil {
 			return false
@@ -234,10 +248,18 @@ func function(ctx context.Context, input input) {
 			log.Error("failed to run worker", "error", err)
 			return false
 		}
+		streaming := false
+		for _, e := range workerEnv[workerID] {
+			if e == "SST_FUNCTION_STREAMING=true" {
+				streaming = true
+				break
+			}
+		}
 		info := &WorkerInfo{
 			FunctionID: functionID,
 			Worker:     worker,
 			WorkerID:   workerID,
+			Streaming:  streaming,
 		}
 		go func() {
 			logs := worker.Logs()
@@ -256,6 +278,19 @@ func function(ctx context.Context, input input) {
 		workers[workerID] = info
 
 		return true
+	}
+
+	restartOrDeferWorker := func(workerID string, info *WorkerInfo) {
+		target, ok := targets[info.FunctionID]
+		if !ok {
+			return
+		}
+		if input.project.Runtime.ShouldRunEagerly(target.Runtime) {
+			startWorker(info.FunctionID, workerID)
+		} else {
+			log.Info("lazy startup: deferring worker restart until invoked", "workerID", workerID, "functionID", info.FunctionID)
+			delete(workers, workerID)
+		}
 	}
 
 	for {
@@ -283,7 +318,7 @@ func function(ctx context.Context, input input) {
 				}
 				log.Info("worker init", "workerID", msg.Source, "functionID", init.FunctionID)
 				workerEnv[workerID] = init.Environment
-				if ok := run(init.FunctionID, workerID); !ok {
+				if ok := startWorker(init.FunctionID, workerID); !ok {
 					result, err := http.Post("http://"+server+workerID+"/runtime/init/error", "application/json", strings.NewReader(`{"errorMessage":"Function failed to build"}`))
 					if err != nil {
 						continue
@@ -363,7 +398,7 @@ func function(ctx context.Context, input input) {
 				}
 				builds = map[string]*runtime.BuildOutput{}
 				for workerID, info := range workers {
-					run(info.FunctionID, workerID)
+					restartOrDeferWorker(workerID, info)
 				}
 			case *runtime.BuildInput:
 				targets[evt.FunctionID] = evt
@@ -397,7 +432,7 @@ func function(ctx context.Context, input input) {
 
 				for workerID, info := range workers {
 					if toBuild[info.FunctionID] {
-						run(info.FunctionID, workerID)
+						restartOrDeferWorker(workerID, info)
 					}
 				}
 				break

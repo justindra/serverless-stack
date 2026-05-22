@@ -17,6 +17,12 @@ import { DevCommand } from "../experimental/dev-command.js";
 export interface OpenSearchArgs {
   /**
    * The OpenSearch engine version. Check out the [available versions](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html#choosing-version).
+   *
+   * :::caution
+   * Changing the version will cause the domain to restart on the next `sst deploy`,
+   * causing downtime. Learn more about [upgrading databases](/docs/upgrade-aws-databases/).
+   * :::
+   *
    * @default `"OpenSearch_2.17"`
    * @example
    * ```js
@@ -29,7 +35,7 @@ export interface OpenSearchArgs {
   /**
    * The username of the master user.
    *
-   * :::caution
+   * :::danger
    * Changing the username will cause the domain to be destroyed and recreated.
    * :::
    *
@@ -62,6 +68,11 @@ export interface OpenSearchArgs {
   password?: Input<string>;
   /**
    * The type of instance to use for the domain. Check out the [supported instance types](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/supported-instance-types.html).
+   *
+   * :::caution
+   * Changing the instance type will cause the domain to restart on the next `sst deploy`,
+   * causing downtime. Learn more about [upgrading databases](/docs/upgrade-aws-databases/).
+   * :::
    *
    * @default `"t3.small"`
    * @example
@@ -141,7 +152,7 @@ export interface OpenSearchArgs {
     /**
      * Transform the OpenSearch domain policy.
      */
-    policy?: Transform<iam.PolicyDocument>;
+    policy?: Transform<opensearch.DomainPolicyArgs>;
   };
 }
 
@@ -306,7 +317,7 @@ export class OpenSearch extends Component implements Link.Linkable {
       //});
       const domain = opensearch.Domain.get(`${name}Domain`, ref.id);
 
-      const input = domain.tags.apply((tags) => {
+      const input = domain.tagsAll.apply((tags) => {
         if (!tags?.["sst:ref:username"])
           throw new VisibleError(
             `Failed to get username for OpenSearch ${name}.`,
@@ -388,16 +399,16 @@ Listening on "${dev.url}"...`,
       return args.password
         ? output(args.password)
         : new RandomPassword(
-          `${name}Password`,
-          {
-            length: 32,
-            minLower: 1,
-            minUpper: 1,
-            minNumeric: 1,
-            minSpecial: 1,
-          },
-          { parent: self },
-        ).result;
+            `${name}Password`,
+            {
+              length: 32,
+              minLower: 1,
+              minUpper: 1,
+              minNumeric: 1,
+              minSpecial: 1,
+            },
+            { parent: self },
+          ).result;
     }
 
     function createSecret() {
@@ -472,20 +483,23 @@ Listening on "${dev.url}"...`,
 
     function createPolicy() {
       return new opensearch.DomainPolicy(
-        `${name}DomainPolicy`,
-        {
-          domainName: domain.domainName,
-          accessPolicies: iam.getPolicyDocumentOutput({
-            statements: [
-              {
-                principals: [{ type: "*", identifiers: ["*"] }],
-                actions: ["*"],
-                resources: ["*"],
-              },
-            ],
-          }).json,
-        },
-        { parent: self },
+        ...transform(
+          args.transform?.policy,
+          `${name}DomainPolicy`,
+          {
+            domainName: domain.domainName,
+            accessPolicies: iam.getPolicyDocumentOutput({
+              statements: [
+                {
+                  principals: [{ type: "*", identifiers: ["*"] }],
+                  actions: ["*"],
+                  resources: ["*"],
+                },
+              ],
+            }).json,
+          },
+          { parent: self },
+        ),
       );
     }
   }
@@ -546,7 +560,7 @@ Listening on "${dev.url}"...`,
    *
    * @param name The name of the component.
    * @param id The ID of the existing OpenSearch component.
-   * @param opts? Resource options.
+   * @param opts Resource options.
    *
    * @example
    * Imagine you create a domain in the `dev` stage. And in your personal stage `frank`,

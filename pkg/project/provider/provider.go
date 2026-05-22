@@ -12,6 +12,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/pulumi/pulumi/pkg/v3/resource/stack"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/encoding"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/flag"
 	"github.com/sst/sst/v3/pkg/id"
@@ -27,6 +29,8 @@ type Home interface {
 	getPassphrase(app, stage string) (string, error)
 	listStages(app string) ([]string, error)
 	cleanup(key, app, stage string) error
+	purge(app, stage string) error
+	removePassphrase(app, stage string) error
 	info() (util.KeyValuePairs[string], error)
 }
 
@@ -81,7 +85,7 @@ func Copy(from Home, to Home, app, stage string) error {
 	return nil
 }
 
-func Passphrase(backend Home, app, stage string) (string, error) {
+func GetPassphrase(backend Home, app, stage string) (string, error) {
 	slog.Info("getting passphrase", "app", app, "stage", stage)
 
 	cache, ok := passphraseCache[backend]
@@ -96,6 +100,18 @@ func Passphrase(backend Home, app, stage string) (string, error) {
 	}
 
 	passphrase, err := backend.getPassphrase(app, stage)
+	if err != nil {
+		return "", err
+	}
+
+	if passphrase != "" {
+		cache[app+stage] = passphrase
+	}
+	return passphrase, nil
+}
+
+func GetOrCreatePassphrase(backend Home, app, stage string) (string, error) {
+	passphrase, err := GetPassphrase(backend, app, stage)
 	if err != nil {
 		return "", err
 	}
@@ -115,9 +131,10 @@ func Passphrase(backend Home, app, stage string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+
+		passphraseCache[backend][app+stage] = passphrase
 	}
 
-	existingPassphrase, ok = cache[app+stage]
 	return passphrase, nil
 }
 
@@ -162,6 +179,20 @@ func Cleanup(backend Home, app, stage string) error {
 	}
 	if err := backend.cleanup("snapshot", app, stage); err != nil {
 		return err
+	}
+	return nil
+}
+
+func Purge(backend Home, app, stage string) error {
+	slog.Info("purging stage", "app", app, "stage", stage)
+	if err := backend.purge(app, stage); err != nil {
+		return err
+	}
+	if err := backend.removePassphrase(app, stage); err != nil {
+		return err
+	}
+	if cache, ok := passphraseCache[backend]; ok {
+		delete(cache, app+stage)
 	}
 	return nil
 }
@@ -321,13 +352,32 @@ func Info(backend Home) (util.KeyValuePairs[string], error) {
 	return backend.info()
 }
 
+func hasResources(backend Home, app, stage string) bool {
+	data, err := backend.getData("app", app, stage)
+	if err != nil {
+		return false
+	}
+
+	bytes, err := io.ReadAll(data)
+	if err != nil {
+		return false
+	}
+
+	checkpoint, _, _, err := stack.UnmarshalVersionedCheckpointToLatestCheckpoint(encoding.JSON, bytes)
+	if err != nil {
+		return false
+	}
+
+	return checkpoint != nil && checkpoint.Latest != nil && len(checkpoint.Latest.Resources) > 0
+}
+
 func putData(backend Home, key, app, stage string, encrypt bool, data interface{}) error {
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
 	if encrypt {
-		passphrase, err := Passphrase(backend, app, stage)
+		passphrase, err := GetOrCreatePassphrase(backend, app, stage)
 		if err != nil {
 			return err
 		}
@@ -368,7 +418,7 @@ func getData(backend Home, key, app, stage string, encrypted bool, out interface
 	}
 
 	if encrypted {
-		passphrase, err := Passphrase(backend, app, stage)
+		passphrase, err := GetPassphrase(backend, app, stage)
 		if err != nil {
 			return err
 		}

@@ -165,7 +165,7 @@ export class CognitoIdentityPool extends Component implements Link.Linkable {
     this.unauthRole = unauthRole;
 
     function getRegion() {
-      return getRegionOutput(undefined, { parent }).name;
+      return getRegionOutput(undefined, { parent }).region;
     }
 
     function createIdentityPool() {
@@ -367,7 +367,7 @@ export class CognitoIdentityPool extends Component implements Link.Linkable {
    *
    * @param name The name of the component.
    * @param identityPoolID The ID of the existing Identity Pool.
-   * @param opts? Resource options.
+   * @param opts Resource options.
    *
    * @example
    * Imagine you create a Identity Pool in the `dev` stage. And in your personal stage `frank`,

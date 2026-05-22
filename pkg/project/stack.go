@@ -2,6 +2,8 @@ package project
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
@@ -16,11 +18,13 @@ type BuildFailedEvent struct {
 type StackInput struct {
 	Command    string
 	Target     []string
+	Exclude    []string
 	ServerPort int
 	Dev        bool
 	Verbose    bool
 	Continue   bool
 	SkipHash   string
+	PolicyPath string
 }
 
 type ConcurrentUpdateEvent struct{}
@@ -35,6 +39,12 @@ type BuildSuccessEvent struct {
 type SkipEvent struct {
 }
 
+type PolicyAdvisoryEvent struct {
+	Policy  string
+	Message string
+	URN     string
+}
+
 type Dev struct {
 	Name        string            `json:"name"`
 	Command     string            `json:"command"`
@@ -46,8 +56,13 @@ type Dev struct {
 	Aws         *struct {
 		Role string `json:"role"`
 	} `json:"aws"`
+	Cloudflare *DevCloudflare `json:"cloudflare"`
 }
 type Devs map[string]Dev
+
+type DevCloudflare struct {
+	Path string `json:"path"`
+}
 
 type Task struct {
 	Name      string  `json:"-"`
@@ -99,52 +114,28 @@ type Error struct {
 	Help    []string `json:"help"`
 }
 
-type CommonError struct {
-	Code    string   `json:"code"`
-	Message string   `json:"message"`
-	Short   []string `json:"short"`
-	Long    []string `json:"long"`
-}
-
-var CommonErrors = []CommonError{
-	{
-		Code:    "TooManyCacheBehaviors",
-		Message: "TooManyCacheBehaviors: Your request contains more CacheBehaviors than are allowed per distribution",
-		Short: []string{
-			"There are too many top-level files and directories inside your app's public asset directory. Move some of them inside subdirectories.",
-			"Learn more about this https://sst.dev/docs/common-errors#toomanycachebehaviors",
-		},
-		Long: []string{
-			"This error usually happens to `SvelteKit`, `SolidStart`, `Nuxt`, and `Analog` components.",
-			"",
-			"CloudFront distributions have a **limit of 25 cache behaviors** per distribution. Each top-level file or directory in your frontend app's asset directory creates a cache behavior.",
-			"",
-			"For example, in the case of SvelteKit, the static assets are in the `static/` directory. If you have a file and a directory in it, it'll create 2 cache behaviors.",
-			"",
-			"```bash frame=\"none\"",
-			"static/",
-			"├── icons/       # Cache behavior for /icons/*",
-			"└── logo.png     # Cache behavior for /logo.png",
-			"```",
-			"So if you have many of these at the top-level, you'll hit the limit. You can request a limit increase through the AWS Support.",
-			"",
-			"Alternatively, you can move some of these into subdirectories. For example, moving them to an `images/` directory, will only create 1 cache behavior.",
-			"",
-			"```bash frame=\"none\"",
-			"static/",
-			"└── images/      # Cache behavior for /images/*",
-			"    ├── icons/",
-			"    └── logo.png",
-			"```",
-			"Learn more about these [CloudFront limits](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cloudfront-limits.html#limits-web-distributions).",
-		},
-	},
-}
-
 var ErrStackRunFailed = fmt.Errorf("stack run had errors")
 var ErrStageNotFound = fmt.Errorf("stage not found")
 var ErrPassphraseInvalid = fmt.Errorf("passphrase invalid")
 var ErrProtectedStage = fmt.Errorf("cannot remove protected stage")
+var ErrProtectedDevStage = fmt.Errorf("cannot run sst dev on protected stage")
+var ErrPolicyViolation = fmt.Errorf("policy violations detected")
+var ErrPolicyConfigError = fmt.Errorf("policy configuration error")
+
+func (p *Project) ResolvePolicyPackPath(policyPath string) (string, error) {
+	var resolvedPath string
+	if filepath.IsAbs(policyPath) {
+		resolvedPath = policyPath
+	} else {
+		resolvedPath = filepath.Join(p.PathRoot(), policyPath)
+	}
+
+	if _, err := os.Stat(resolvedPath); err != nil {
+		return "", fmt.Errorf("Policy pack not found in path: %v", resolvedPath)
+	}
+
+	return resolvedPath, nil
+}
 
 func (p *Project) Lock(command string) (*provider.Update, error) {
 	return provider.Lock(p.home, p.Version(), command, p.app.Name, p.app.Stage)

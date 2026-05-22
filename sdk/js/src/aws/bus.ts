@@ -1,15 +1,10 @@
-import { AwsOptions, client } from "../aws/client.js";
-import { Resource } from "../resource.js";
+import { awsFetch, type AwsOptions } from "./client.js";
+import { Resource } from "../resource/index.js";
 import { event } from "../event/index.js";
-import { EventBridgeEvent, EventBridgeHandler } from "aws-lambda";
+import { EventBridgeEvent, EventBridgeHandler, Context } from "aws-lambda";
 
-export module bus {
+export namespace bus {
   export type Name = Extract<typeof Resource, { type: "sst.aws.Bus" }>["name"];
-
-  function url(region?: string, options?: AwsOptions) {
-    if (options?.region) region = options.region;
-    return `https://events.${region}.amazonaws.com/`;
-  }
 
   export function subscriber<Events extends event.Definition>(
     _events: Events | Events[],
@@ -18,15 +13,16 @@ export module bus {
         [K in Events["type"]]: Extract<Events, { type: K }>["$payload"];
       }[Events["type"]],
       raw: EventBridgeEvent<string, any>,
+      context: Context
     ) => Promise<void>,
   ): EventBridgeHandler<string, any, void> {
-    return async function (event) {
+    return async function (event, context) {
       const payload = {
         type: event["detail-type"],
         properties: event.detail.properties,
         metadata: event.detail.metadata,
       };
-      return cb(payload, event);
+      return cb(payload, event, context);
     };
   }
 
@@ -44,8 +40,6 @@ export module bus {
       aws?: AwsOptions;
     },
   ): Promise<any> {
-    const c = await client();
-    const u = url(c.region, options?.aws);
     const evt =
       typeof def === "string"
         ? {
@@ -54,10 +48,11 @@ export module bus {
             metadata: options?.metadata || {},
           }
         : await def.create(properties, options?.metadata);
-    const res = await c
-      .fetch(u, {
+    const res = await awsFetch(
+      "events",
+      "/",
+      {
         method: "POST",
-        aws: options?.aws,
         headers: {
           "X-Amz-Target": "AWSEvents.PutEvents",
           "Content-Type": "application/x-amz-json-1.1",
@@ -75,7 +70,9 @@ export module bus {
             },
           ],
         }),
-      })
+      },
+      options,
+    )
       .catch((e) => {
         if (e instanceof Error) console.log("cause", e.cause);
         throw e;

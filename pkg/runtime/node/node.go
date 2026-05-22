@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/evanw/esbuild/pkg/api"
 	esbuild "github.com/evanw/esbuild/pkg/api"
 	"github.com/sst/sst/v3/pkg/flag"
 	"github.com/sst/sst/v3/pkg/process"
@@ -21,18 +20,18 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-var loaderMap = map[string]api.Loader{
-	"js":      api.LoaderJS,
-	"jsx":     api.LoaderJSX,
-	"ts":      api.LoaderTS,
-	"tsx":     api.LoaderTSX,
-	"css":     api.LoaderCSS,
-	"json":    api.LoaderJSON,
-	"text":    api.LoaderText,
-	"base64":  api.LoaderBase64,
-	"file":    api.LoaderFile,
-	"dataurl": api.LoaderDataURL,
-	"binary":  api.LoaderBinary,
+var LoaderMap = map[string]esbuild.Loader{
+	"js":      esbuild.LoaderJS,
+	"jsx":     esbuild.LoaderJSX,
+	"ts":      esbuild.LoaderTS,
+	"tsx":     esbuild.LoaderTSX,
+	"css":     esbuild.LoaderCSS,
+	"json":    esbuild.LoaderJSON,
+	"text":    esbuild.LoaderText,
+	"base64":  esbuild.LoaderBase64,
+	"file":    esbuild.LoaderFile,
+	"dataurl": esbuild.LoaderDataURL,
+	"binary":  esbuild.LoaderBinary,
 }
 
 var LoaderToString = []string{
@@ -113,25 +112,121 @@ func (w *Worker) Logs() io.ReadCloser {
 }
 
 type NodeProperties struct {
-	Loader       map[string]string    `json:"loader"`
-	Install      []string             `json:"install"`
-	Banner       string               `json:"banner"`
-	ESBuild      esbuild.BuildOptions `json:"esbuild"`
-	Minify       bool                 `json:"minify"`
-	Format       string               `json:"format"`
-	Target       string               `json:"target"`
-	SourceMap    *bool                `json:"sourceMap"`
-	Splitting    bool                 `json:"splitting"`
-	Plugins      string               `json:"plugins"`
-	Architecture string               `json:"architecture"`
+	Loader       map[string]string `json:"loader"`
+	Install      map[string]string `json:"install"`
+	Banner       string            `json:"banner"`
+	ESBuild      ESBuildOptions    `json:"esbuild"`
+	Minify       bool              `json:"minify"`
+	Format       string            `json:"format"`
+	Target       string            `json:"target"`
+	SourceMap    *bool             `json:"sourceMap"`
+	Splitting    bool              `json:"splitting"`
+	Plugins      string            `json:"plugins"`
+	Architecture string            `json:"architecture"`
+}
+
+type ESBuildOptions struct {
+	Target     string            `json:"target"`
+	Sourcemap  json.RawMessage   `json:"sourcemap"`
+	KeepNames  *bool             `json:"keepNames"`
+	Define     map[string]string `json:"define"`
+	Banner     map[string]string `json:"banner"`
+	External   []string          `json:"external"`
+	NodePaths  []string          `json:"nodePaths"`
+	MainFields []string          `json:"mainFields"`
+	Conditions []string          `json:"conditions"`
+}
+
+func (o *ESBuildOptions) ResolveTarget(fallback esbuild.Target) esbuild.Target {
+	if t, ok := esTargetMap[strings.ToLower(o.Target)]; ok {
+		return t
+	}
+	return fallback
+}
+
+func (o *ESBuildOptions) ResolveSourcemap(fallback esbuild.SourceMap) esbuild.SourceMap {
+	if len(o.Sourcemap) == 0 {
+		return fallback
+	}
+	var str string
+	if json.Unmarshal(o.Sourcemap, &str) == nil {
+		if s, ok := esSourcemapMap[strings.ToLower(str)]; ok {
+			return s
+		}
+		return fallback
+	}
+	var b bool
+	if json.Unmarshal(o.Sourcemap, &b) == nil {
+		if b {
+			return esbuild.SourceMapLinked
+		}
+		return esbuild.SourceMapNone
+	}
+	return fallback
+}
+
+func (o *ESBuildOptions) ResolveKeepNames(fallback bool) bool {
+	if o.KeepNames != nil {
+		return *o.KeepNames
+	}
+	return fallback
+}
+
+func (o *ESBuildOptions) ResolveMainFields(fallback []string) []string {
+	if len(o.MainFields) > 0 {
+		return o.MainFields
+	}
+	return fallback
+}
+
+func (o *ESBuildOptions) ResolveConditions(fallback []string) []string {
+	if len(o.Conditions) > 0 {
+		return o.Conditions
+	}
+	return fallback
+}
+
+var esTargetMap = map[string]esbuild.Target{
+	"esnext": esbuild.ESNext,
+	"es5":    esbuild.ES5,
+	"es6":    esbuild.ES2015,
+	"es2015": esbuild.ES2015,
+	"es2016": esbuild.ES2016,
+	"es2017": esbuild.ES2017,
+	"es2018": esbuild.ES2018,
+	"es2019": esbuild.ES2019,
+	"es2020": esbuild.ES2020,
+	"es2021": esbuild.ES2021,
+	"es2022": esbuild.ES2022,
+	"es2023": esbuild.ES2023,
+}
+
+var esSourcemapMap = map[string]esbuild.SourceMap{
+	"inline":   esbuild.SourceMapInline,
+	"linked":   esbuild.SourceMapLinked,
+	"external": esbuild.SourceMapExternal,
+	"both":     esbuild.SourceMapInlineAndExternal,
 }
 
 var NODE_EXTENSIONS = []string{".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
+
+var EDITOR_ENV = []string{
+	"VSCODE_INSPECTOR_OPTIONS",
+	"JB_IDE_HOST",
+	"JB_IDE_PORT",
+	"JB_INTERPRETER",
+	"JB_NODE_DEBUG_CONNECTION_GATEWAY_HOST",
+	"JB_NODE_DEBUG_CONNECTION_GATEWAY_PORT",
+	"JETBRAINS_NODE_BIND_HOST",
+	"JETBRAINS_NODE_DEBUGGER_ATTACH_TO_HELPERS",
+	"JETBRAINS_NODE_DEBUGGER_VERBOSE_LOGGING",
+}
 
 func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Worker, error) {
 	cmd := process.Command(
 		"node",
 		"--enable-source-maps",
+		"--no-warnings",
 		filepath.Join(
 			path.ResolvePlatformDir(input.CfgPath),
 			"/dist/nodejs-runtime/index.js",
@@ -141,7 +236,11 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 	)
 	cmd.Env = input.Env
 	cmd.Env = append(cmd.Env, "NODE_OPTIONS="+os.Getenv("NODE_OPTIONS"))
-	cmd.Env = append(cmd.Env, "VSCODE_INSPECTOR_OPTIONS="+os.Getenv("VSCODE_INSPECTOR_OPTIONS"))
+	for _, key := range EDITOR_ENV {
+		if value := os.Getenv(key); value != "" {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+	}
 	cmd.Env = append(cmd.Env, "AWS_LAMBDA_RUNTIME_API="+input.Server)
 	slog.Info("starting worker", "server", input.Server)
 	cmd.Dir = input.Build.Out
@@ -157,6 +256,13 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 
 func (r *Runtime) Match(runtime string) bool {
 	return strings.HasPrefix(runtime, "node")
+}
+
+// ShouldRunEagerly returns true for Node.js - workers restart immediately after rebuild.
+// Node.js uses esbuild's metafile for precise per-function dependency tracking,
+// so only functions that actually import a changed file will rebuild.
+func (r *Runtime) ShouldRunEagerly() bool {
+	return true
 }
 
 func (r *Runtime) getFile(input *runtime.BuildInput) (string, bool) {

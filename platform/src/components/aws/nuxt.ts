@@ -379,21 +379,6 @@ export interface NuxtArgs extends SsrSiteArgs {
    */
   buildCommand?: SsrSiteArgs["buildCommand"];
   /**
-   * Configure how the Nuxt app assets are uploaded to S3.
-   *
-   * By default, this is set to the following. Read more about these options below.
-   * ```js
-   * {
-   *   assets: {
-   *     textEncoding: "utf-8",
-   *     versionedFilesCacheHeader: "public,max-age=31536000,immutable",
-   *     nonVersionedFilesCacheHeader: "public,max-age=0,s-maxage=86400,stale-while-revalidate=8640"
-   *   }
-   * }
-   * ```
-   */
-  assets?: SsrSiteArgs["assets"];
-  /**
    * Configure the Nuxt app to use an existing CloudFront cache policy.
    *
    * :::note
@@ -497,6 +482,12 @@ export class Nuxt extends SsrSite {
 
   protected buildPlan(outputPath: Output<string>): Output<Plan> {
     return outputPath.apply((outputPath) => {
+      const nitro = JSON.parse(
+        fs.readFileSync(
+          path.join(outputPath, ".output", "nitro.json"),
+          "utf-8",
+        ),
+      );
       const basepath = fs
         .readFileSync(path.join(outputPath, "nuxt.config.ts"), "utf-8")
         .match(/baseURL: ['"](.*)['"]/)?.[1];
@@ -507,6 +498,7 @@ export class Nuxt extends SsrSite {
           description: "Server handler for Nuxt",
           handler: "index.handler",
           bundle: path.join(outputPath, ".output", "server"),
+          streaming: nitro?.config?.awsLambda?.streaming === true,
         },
         assets: [
           {

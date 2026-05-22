@@ -2,7 +2,7 @@ import { ComponentResourceOptions, Output, all, output } from "@pulumi/pulumi";
 import { Component, outputId, Transform, transform } from "../component";
 import { Link } from "../link";
 import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function";
+import { FunctionArgs, FunctionArn } from "./function.js";
 import { hashStringToPrettyString, logicalName } from "../naming";
 import { parseTopicArn } from "./helpers/arn";
 import { SnsTopicLambdaSubscriber } from "./sns-topic-lambda-subscriber";
@@ -645,7 +645,7 @@ export class SnsTopic extends Component implements Link.Linkable {
    *
    * @param name The name of the component.
    * @param topicArn The ARN of the existing SNS Topic.
-   * @param opts? Resource options.
+   * @param opts Resource options.
    *
    * @example
    * Imagine you create a topic in the `dev` stage. And in your personal stage `frank`,

@@ -28,13 +28,28 @@ import (
 
 var version = "dev"
 
+func getAliasName(entry *project.ProviderLockEntry) string {
+	name := entry.Name
+	if entry.Name == entry.Package {
+		name = entry.Alias
+	}
+	for _, suffix := range []string{"official", "community"} {
+		if !strings.HasSuffix(entry.Name, "-"+suffix) && !strings.HasSuffix(entry.Package, "-"+suffix) {
+			continue
+		}
+		name = strings.TrimSuffix(name, "-"+suffix)
+		name = strings.TrimSuffix(name, suffix)
+	}
+	return name
+}
+
 func main() {
 	// check if node_modules/.bin/sst exists
 	nodeModulesBinPath := filepath.Join("node_modules", ".bin", "sst")
 	binary, _ := os.Executable()
 	if _, err := os.Stat(nodeModulesBinPath); err == nil && !strings.Contains(binary, "node_modules") && os.Getenv("SST_SKIP_LOCAL") != "true" && version != "dev" {
 		// forward command to node_modules/.bin/sst
-		fmt.Println(ui.TEXT_WARNING_BOLD.Render("Warning: ") + "You are using a global installation of SST but you also have a local installation specified in your package.json. The local installation will be used but you should typically run it through your package manager.")
+		fmt.Fprintln(os.Stderr, ui.TEXT_WARNING_BOLD.Render("Warning: ")+"You are using a global installation of SST but you also have a local installation specified in your package.json. The local installation will be used but you should typically run it through your package manager.")
 		cmd := process.Command(nodeModulesBinPath, os.Args[1:]...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -69,7 +84,7 @@ func main() {
 			if msg != "" {
 				ui.Error(readableErr.Error())
 				if readableErr.IsHinted() {
-					fmt.Println("   " + ui.TEXT_DIM.Render(readableErr.Unwrap().Error()))
+					fmt.Fprintln(os.Stderr, "   "+ui.TEXT_DIM.Render(readableErr.Unwrap().Error()))
 				}
 			}
 		} else {
@@ -107,6 +122,7 @@ func run() error {
 
 	if !flag.SST_SKIP_DEPENDENCY_CHECK {
 		spin := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
+		spin.Color("cyan")
 		spin.Suffix = "  Download dependencies..."
 		if global.NeedsPulumi() {
 			spin.Suffix = "  Installing pulumi..."
@@ -458,6 +474,14 @@ var root = &cli.Command{
 						Long:  "Defaults to using `multi` mode. Use `mono` to get a single stream of all child process logs or `basic` to not spawn any child processes.",
 					},
 				},
+				{
+					Name: "policy",
+					Type: "string",
+					Description: cli.Description{
+						Short: "Path to policy pack",
+						Long:  "Run policy pack validation against the preview changes.",
+					},
+				},
 			},
 			Args: []cli.Argument{
 				{
@@ -511,7 +535,10 @@ var root = &cli.Command{
 					"```ts title=\"sst.config.ts\"",
 					"{",
 					"  providers: {",
-					"    aws: \"6.27.0\"",
+					"    aws: {",
+					"      package: \"@pulumi/aws\",",
+					"      version: \"6.27.0\"",
+					"    }",
 					"  }",
 					"}",
 					"```",
@@ -528,6 +555,7 @@ var root = &cli.Command{
 					"{",
 					"  providers: {",
 					"    aws: {",
+					"      package: \"@pulumi/aws\",",
 					"      version: \"6.26.0\"",
 					"    }",
 					"  }",
@@ -541,6 +569,8 @@ var root = &cli.Command{
 					"```bash frame=\"none\"",
 					"NPM_REGISTRY=https://my-registry.com sst add aws",
 					"```",
+					"",
+					"You can also set the registry in your `.npmrc` file. If your registry requires authentication, SST supports `_authToken`, `_auth`, and `username`/`_password` from `.npmrc`.",
 				}, "\n"),
 			},
 			Args: []cli.Argument{
@@ -556,6 +586,7 @@ var root = &cli.Command{
 			Run: func(cli *cli.Cli) error {
 				pkg := cli.Positional(0)
 				spin := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
+				spin.Color("cyan")
 				spin.Suffix = "  Adding provider..."
 				spin.Start()
 				defer spin.Stop()
@@ -581,13 +612,14 @@ var root = &cli.Command{
 						return err
 					}
 				}
-				entry, err := project.FindProvider(pkg, "latest")
+				entry, err := project.FindProvider(pkg, "latest", pkg)
 				if err != nil {
 					return util.NewReadableError(err, "Could not find provider "+pkg)
 				}
-				err = p.Add(entry.Name, entry.Version)
+				providerName := getAliasName(entry)
+				err = p.Add(providerName, entry.Version, entry.Package)
 				if err != nil {
-					return err
+					return util.NewReadableError(err, err.Error())
 				}
 				spin.Suffix = "  Downloading provider..."
 				p, err = project.New(&project.ProjectConfig{
@@ -647,6 +679,7 @@ var root = &cli.Command{
 				}
 
 				spin := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
+				spin.Color("cyan")
 				defer spin.Stop()
 				spin.Suffix = "  Installing providers..."
 				spin.Start()
@@ -936,18 +969,6 @@ var root = &cli.Command{
 			},
 		},
 		{
-			Name:   "common-errors",
-			Hidden: true,
-			Run: func(cli *cli.Cli) error {
-				data, err := json.MarshalIndent(project.CommonErrors, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Println(string(data))
-				return nil
-			},
-		},
-		{
 			Name: "refresh",
 			Description: cli.Description{
 				Short: "Refresh the local app state",
@@ -962,10 +983,23 @@ var root = &cli.Command{
 					":::note",
 					"The `sst refresh` does not make changes to the resources in the cloud provider.",
 					":::",
+					"",
+					"By default, this refreshes the stage as it would be deployed using `sst deploy`. If the stage was deployed using `sst dev`, use the `--dev` flag.",
+					"",
+					"```bash frame=\"none\"",
+					"sst refresh --dev",
+					"```",
+					"",
 					"You can also refresh a specific component by passing in the name of the component.",
 					"",
 					"```bash frame=\"none\"",
 					"sst refresh --target MyComponent",
+					"```",
+					"",
+					"Alternatively, exclude a specific component from the refresh.",
+					"",
+					"```bash frame=\"none\"",
+					"sst refresh --exclude MyComponent",
 					"```",
 					"",
 					"This is useful for cases where you want to ensure that your local state is in sync with your cloud provider. [Learn more about how state works](/docs/providers/#how-state-works).",
@@ -978,6 +1012,22 @@ var root = &cli.Command{
 					Description: cli.Description{
 						Short: "Run it only for a component",
 						Long:  "Only run it for the given component.",
+					},
+				},
+				{
+					Name: "exclude",
+					Type: "string",
+					Description: cli.Description{
+						Short: "Exclude a component",
+						Long:  "Exclude the specified component from the operation.",
+					},
+				},
+				{
+					Name: "dev",
+					Type: "bool",
+					Description: cli.Description{
+						Short: "Refresh in dev mode",
+						Long:  "Refresh the dev version of this stage.",
 					},
 				},
 			},

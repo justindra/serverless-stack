@@ -2,7 +2,8 @@ import { ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
 import { Component, Transform, transform } from "../component";
 import { Link } from "../link";
 import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function";
+import { Function, FunctionArgs, FunctionArn } from "./function.js";
+import { Workflow } from "./workflow.js";
 import { parseEventBusArn } from "./helpers/arn";
 import { BusLambdaSubscriber } from "./bus-lambda-subscriber";
 import { cloudwatch } from "@pulumi/aws";
@@ -11,6 +12,31 @@ import { Queue } from "./queue";
 import { BusQueueSubscriber } from "./bus-queue-subscriber";
 
 export interface BusArgs {
+  /**
+   * Configure logging for the EventBus.
+   *
+   * @example
+   *
+   * ```js
+   * new sst.aws.Bus("MyBus", {
+   *   logging: {
+   *     level: "error",
+   *     detail: true,
+   *   },
+   * });
+   * ```
+   */
+  logging?: Input<{
+    /**
+     * The level of logging.
+     */
+    level: Input<"error" | "info" | "trace">;
+    /**
+     * Whether to include the event detail in the log.
+     * @default `false`
+     */
+    detail?: Input<boolean>;
+  }>;
   /**
    * [Transform](/docs/components#transform) how this component creates its underlying
    * resources.
@@ -24,6 +50,19 @@ export interface BusArgs {
 }
 
 export interface BusSubscriberArgs {
+  /**
+   * Configures whether the subscriber is enabled. When disabled, the EventBridge
+   * rule is still created, but it won't receive events.
+   *
+   * @default true
+   * @example
+   * ```ts
+   * {
+   *   enabled: false
+   * }
+   * ```
+   */
+  enabled?: Input<boolean>;
   /**
    * Filter the messages that'll be processed by the subscriber.
    *
@@ -220,7 +259,17 @@ export class Bus extends Component implements Link.Linkable {
 
     function createBus() {
       return new cloudwatch.EventBus(
-        ...transform(args.transform?.bus, `${name}Bus`, {}, { parent: self }),
+        ...transform(
+          args.transform?.bus,
+          `${name}Bus`,
+          {
+            logConfig: args.logging && output(args.logging).apply((l) => ({
+              level: l.level.toUpperCase(),
+              includeDetail: l.detail ? "FULL" : "NONE",
+            })),
+          },
+          { parent: self },
+        ),
       );
     }
   }
@@ -292,7 +341,9 @@ export class Bus extends Component implements Link.Linkable {
    */
   public subscribe(
     name: string,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
+    subscriber: Input<
+      string | Workflow | Function | FunctionArgs | FunctionArn
+    >,
     args: BusSubscriberArgs = {},
   ) {
     return Bus._subscribeFunction(
@@ -350,7 +401,9 @@ export class Bus extends Component implements Link.Linkable {
   public static subscribe(
     name: string,
     busArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
+    subscriber: Input<
+      string | Workflow | Function | FunctionArgs | FunctionArn
+    >,
     args?: BusSubscriberArgs,
   ) {
     return output(busArn).apply((busArn) => {
@@ -371,7 +424,9 @@ export class Bus extends Component implements Link.Linkable {
     subscriberName: string,
     busName: Input<string>,
     busArn: string | Output<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
+    subscriber: Input<
+      string | Workflow | Function | FunctionArgs | FunctionArn
+    >,
     args: BusSubscriberArgs = {},
     opts: ComponentResourceOptions = {},
   ) {
@@ -535,7 +590,7 @@ export class Bus extends Component implements Link.Linkable {
    *
    * @param name The name of the component.
    * @param busName The name of the existing EventBus.
-   * @param opts? Resource options.
+   * @param opts Resource options.
    *
    * @example
    * Imagine you create a bus in the `dev` stage. And in your personal stage `frank`,
